@@ -217,21 +217,10 @@ def moveToPoint2(pose, reference):
             # berhenti
             pass
 
-    print("prevPose = {:.2f} reference[2] = {:.2f} pose[2] = {:.2f}".format(moveToPoint2.prevPose * (180 / np.pi), reference[2] * (180 / np.pi), pose[2] * (180 / np.pi)))
-    # if(moveToPoint2.prevPose>0 and reference[2]<0):
-    #     print("ya,masuk")
-    #     v_rot = -kp[1] * (pose[2] - abs(reference[2]))
-    # elif(moveToPoint2.prevPose<0 and reference[2]>=0):
-    #     v_rot = kp[1] * (reference[2] - abs(pose[2]))
-
-    moveToPoint2.prevPose = pose[2]
-
-    print("referenceAngle = {:.2f} error[2] = {:.2f} pose[2] = {:.2f}".format(referenceAngle * (180 / np.pi), error[2] * (180 / np.pi) ,pose[2] * (180 / np.pi)))
-    print("v_trans = {:.2f} v_rot = {:.2f}".format(v_trans, v_rot))
+    # print("referenceAngle = {:.2f} error[2] = {:.2f} pose[2] = {:.2f}".format(referenceAngle * (180 / np.pi), error[2] * (180 / np.pi) ,pose[2] * (180 / np.pi)))
+    # print("v_trans = {:.2f} v_rot = {:.2f}".format(v_trans, v_rot))
 
     return v_trans, v_rot
-
-moveToPoint2.prevPose = 0
 
 
 def limitSpeed(v1, v2, lim1, lim2):
@@ -248,26 +237,50 @@ def limitSpeed(v1, v2, lim1, lim2):
 
     return v1, v2
 
+def pathTracking(robotPose, waypoints, offset):
+
+    length = len(waypoints)
+    i = pathTracking.i
+    
+    err_x = waypoints[i][0] - robotPose[0]
+    err_y = waypoints[i][1] - robotPose[1]
+
+    print("wp = {} wp_target = {:.2f} {:.2f} {:.2f} err_x = {:.2f} err_y = {:.2f}".format(i, waypoints[i][0], waypoints[i][1], waypoints[i][2], err_x, err_y))
+
+    if(abs(err_x) <= offset and abs(err_y) <= offset and pathTracking.i < length-1):
+        pathTracking.i = pathTracking.i + 1
+        return waypoints[i][0], waypoints[i][1], waypoints[i][2]
+    else:
+        return waypoints[i][0], waypoints[i][1], waypoints[i][2]
+
+pathTracking.i = 0
+
 # === Main Program ===
 # --------------------
 print("Program started")
 # --- Connection to Coppelia Simulator ---
 client_id = connectSimulator()
+
 # --- object handle ---
 motor_left_handle, motor_right_handle = getMotorHandle(client_id)
 sensor_handle = getSensorHandle(client_id)
 robotHandle = setObjectHandler(client_id, "/PioneerP3DX")
-waypoint1 = setObjectHandler(client_id, "/Cylinder[0]")
+waypoints = [None]*4
+for i in range(4):
+    waypoints[i] = setObjectHandler(client_id, "/Cylinder[{}]".format(i))
+
 # --- Simulation Process ---
 samp_time = 0.1
 n = 1
 velo_zero = (0,0)
 cmd_vel = velo_zero
 time_start = time.time()
+mode = 5
 
-mode = 4
 robotPose = getObjectPose(client_id, robotHandle, block=True)
-waypoint1_pose = getObjectPose(client_id, waypoint1, block=True)
+waypointsPose = [None]*4
+for i in range(4):
+    waypointsPose[i] = getObjectPose(client_id, waypoints[i], block=True)
  
 
 while True:
@@ -280,46 +293,62 @@ while True:
         # update time
         n += 1
         
+        # Mode: Keyboard
         if(mode == 1):
             keyboardRoutine()
 
+        # Mode: Object Follower
         elif(mode == 2):
             v_trans, v_rot = followObject(object_distance[2], object_distance[3], object_distance[4], object_distance[5])
             v_1, v_2 = inverseKinematics(v_trans, v_rot)
             v_1, v_2 = limitSpeed(v_1, v_2, 4, 4)
             cmd_vel = (v_1, v_2)
-
+            
             print("v_1 = {:.2f} v_2 = {:.2f} v_trans = {:.2f} v_rot {:.2f}".format(float(v_1), float(v_2), float(v_trans), float(v_rot)))
 
+        # Position Control Inverse vx vy vz
         elif(mode == 3):
             # BELUM WORKING HEHE#
             robotPose = getObjectPose(client_id, robotHandle)
-            waypoint1_pose = getObjectPose(client_id, waypoint1)
-            robotSpeed = moveToPoint(robotPose, waypoint1_pose)
+            waypointsPose[0] = getObjectPose(client_id, waypoints[0])
+            robotSpeed = moveToPoint(robotPose, waypoints[0])
             v_1, v_2 = inverseKinematics3D(robotSpeed, robotPose[2])
             # v_1, v_2 = limitSpeed(v_1, v_2, 8, 8)
             cmd_vel = (v_1, v_2)
 
             print("v1 = {} v2 = {}".format(v_1, v_2))
             print("Robot Pose: x = {:.2f} y = {:.2f} theta = {:.2f}".format(robotPose[0], robotPose[1], robotPose[2] * (180 / np.pi)))
-            print("Waypoint Pose: x = {:.2f} y = {:.2f} theta = {:.2f}".format(waypoint1_pose[0], waypoint1_pose[1], waypoint1_pose[2] * (180 / np.pi)))
+            print("Waypoint Pose: x = {:.2f} y = {:.2f} theta = {:.2f}".format(waypointsPose[0][0], waypointsPose[0][1], waypointsPose[0][2] * (180 / np.pi)))
 
+        # Position Control Inverse vtrans vrot
         elif(mode == 4):
             robotPose = getObjectPose(client_id, robotHandle)
-            waypoint1_pose = getObjectPose(client_id, waypoint1)
-            v_trans, v_rot = moveToPoint2(robotPose, waypoint1_pose)  
+            waypointsPose[0] = getObjectPose(client_id, waypoints[0])
+            v_trans, v_rot = moveToPoint2(robotPose, waypointsPose[0])  
             v_1, v_2 = inverseKinematics(v_trans, v_rot)      
             # v_1, v_2 = limitSpeed(v_1, v_2, 8, 8)
             cmd_vel = (float(v_1), float(v_2))
 
             print("Robot Pose: x = {:.2f} y = {:.2f} theta = {:.2f}".format(robotPose[0], robotPose[1], robotPose[2] * (180 / np.pi)))
-            print("Waypoint Pose: x = {:.2f} y = {:.2f} theta = {:.2f}".format(waypoint1_pose[0], waypoint1_pose[1], waypoint1_pose[2] * (180 / np.pi)))
+            print("Waypoint Pose: x = {:.2f} y = {:.2f} theta = {:.2f}".format(waypointsPose[0][0], waypointsPose[0][1], waypointsPose[0][2] * (180 / np.pi)))
             print("v_1 = {:.2f} v_2 = {:.2f}".format(float(v_1), float(v_2)))
             # print(v_1)
             # print(v_2)
         
+        # Path Tracking
         elif(mode == 5):
-            pass
+            robotPose = getObjectPose(client_id, robotHandle)
+            waypointsPose[3] = getObjectPose(client_id, waypoints[3])
+            wp_x, wp_y, wp_z = pathTracking(robotPose, waypointsPose, 1)
+            v_trans, v_rot = moveToPoint2(robotPose, [wp_x, wp_y, wp_z])  
+            v_1, v_2 = inverseKinematics(v_trans, v_rot)      
+            # v_1, v_2 = limitSpeed(v_1, v_2, 8, 8)
+            cmd_vel = (float(v_1), float(v_2))
+
+            print("Robot Pose: x = {:.2f} y = {:.2f} theta = {:.2f}".format(robotPose[0], robotPose[1], robotPose[2] * (180 / np.pi)))
+            print("Waypoint Pose: x = {:.2f} y = {:.2f} theta = {:.2f}".format(waypointsPose[0][0], waypointsPose[0][1], waypointsPose[0][2] * (180 / np.pi)))
+            print("v_1 = {:.2f} v_2 = {:.2f}".format(float(v_1), float(v_2)))
+
         # show info
         print("Time: ", round(t_now, 2), "front side object distance = ", object_distance[3], object_distance[4], "\n")
     
