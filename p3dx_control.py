@@ -118,7 +118,7 @@ def inverseKinematics(v_trans, v_rot):
 
     # print("v_1 = {} v_2 = {}".format(Phi[0], Phi[1]))
 
-    return Phi[0], Phi[1]
+    return Phi[0]*0.5, Phi[1]*0.5
 
 def inverseKinematics3D(speed, angle):
 
@@ -172,34 +172,66 @@ def moveToPoint(pose, reference):
 def moveToPoint2(pose, reference):
 
     error = [0, 0, 0]
-    kp = [0.75, 2.5]
+    kp = [1, 2] # 1, 2 | 0.75, 1.5
     v_trans = 0
     v_rot = 0
     eps = 0.1
     eps2 = 0.05
 
+    # reference_coba = -200*np.pi/180
+
     error[0] = reference[0] - pose[0]
     error[1] = reference[1] - pose[1]
     error[2] = reference[2] - pose[2]
+
+    print("reference[2] = {:.2f} pose[2] = {:.2f} error[2] = {:.2f}".format(reference[2] * (180 / np.pi), pose[2] * (180 / np.pi), error[2] * (180 / np.pi)))
+
     distance = np.sqrt(error[0]**2 + error[1]**2)
     referenceAngle = np.arctan2(error[1], error[0])
+    error_positioning = referenceAngle - pose[2]
 
+    # Search nearest angle
+    if(abs(error[2]) >= np.pi):
+        if(error[2] > 0):
+            error[2] = error[2] - 2*np.pi
+        else:
+            error[2] = error[2] + 2*np.pi
+
+    if(abs(error_positioning) >= np.pi):
+        if(error_positioning > 0):
+            error_positioning = error_positioning - 2*np.pi
+        else:
+            error_positioning = error_positioning + 2*np.pi
+
+    # Checking whether position or orientation control
     if(abs(distance) >= eps):
         v_trans = kp[0] * distance
         # v_trans = kp[0] * (error[0]/np.cos(pose[2]))
-        v_rot = -kp[1] * (referenceAngle - pose[2])
-        print("error[0] = {:.2f} pose[2] = {:.2f} cos(pose[2]) = {:.2f} v_trans = {:.2f}".format(error[0], pose[2], np.cos(pose[2]), v_trans))
+        v_rot = -kp[1] * error_positioning
+        print("error[0] = {:.2f} error[1] = {:.2f} distance = {:.2f}".format(error[0], error[1], distance))
         
     else:
         if(abs(error[2]) >= eps2):
             v_rot = -kp[1] * error[2]
         else:
+            # berhenti
             pass
 
-    print("referenceAngle = {:.2f} pose[2] = {:.2f}".format(referenceAngle * (180 / np.pi), pose[2] * (180 / np.pi)))
+    print("prevPose = {:.2f} reference[2] = {:.2f} pose[2] = {:.2f}".format(moveToPoint2.prevPose * (180 / np.pi), reference[2] * (180 / np.pi), pose[2] * (180 / np.pi)))
+    # if(moveToPoint2.prevPose>0 and reference[2]<0):
+    #     print("ya,masuk")
+    #     v_rot = -kp[1] * (pose[2] - abs(reference[2]))
+    # elif(moveToPoint2.prevPose<0 and reference[2]>=0):
+    #     v_rot = kp[1] * (reference[2] - abs(pose[2]))
+
+    moveToPoint2.prevPose = pose[2]
+
+    print("referenceAngle = {:.2f} error[2] = {:.2f} pose[2] = {:.2f}".format(referenceAngle * (180 / np.pi), error[2] * (180 / np.pi) ,pose[2] * (180 / np.pi)))
     print("v_trans = {:.2f} v_rot = {:.2f}".format(v_trans, v_rot))
 
     return v_trans, v_rot
+
+moveToPoint2.prevPose = 0
 
 
 def limitSpeed(v1, v2, lim1, lim2):
@@ -289,7 +321,7 @@ while True:
         elif(mode == 5):
             pass
         # show info
-        print("Time: ", round(t_now, 2), "front side object distance = ", object_distance[3], object_distance[4])
+        print("Time: ", round(t_now, 2), "front side object distance = ", object_distance[3], object_distance[4], "\n")
     
     # if keyboard.is_pressed('esc'):
     #     setRobotMotion(client_id, [motor_left_handle, motor_right_handle], velo_zero)
