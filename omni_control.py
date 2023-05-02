@@ -20,11 +20,13 @@ def connectSimulator():
         sys.exit("Could not connect")
     return clientID
 
+
 def setObjectHandler(clientID, path):
     objectHandler = sim.simxGetObjectHandle(clientID, path, sim.simx_opmode_blocking)[1]
     return objectHandler
 
-def getObjectPose(clientID, objectHandle, block=None):
+
+def getObjectPose(clientID, objectHandle, block=None, robot=None):
     if(block == None):
         position = sim.simxGetObjectPosition(clientID, objectHandle, -1, sim.simx_opmode_oneshot)[1]
         orientation = sim.simxGetObjectOrientation(clientID, objectHandle, -1, sim.simx_opmode_oneshot)[1]
@@ -33,7 +35,20 @@ def getObjectPose(clientID, objectHandle, block=None):
         orientation = sim.simxGetObjectOrientation(clientID, objectHandle, -1, sim.simx_opmode_blocking)[1]
 
     # print("Pose of: x = {:.2f} y = {:.2f} theta = {:.2f}".format(position[0], position[1], orientation[2]*(180/np.pi)))
+    if(robot == True): # transformating axis
+        orientation = sim.simxGetObjectOrientation(clientID, robotOrientationHandler, -1, sim.simx_opmode_oneshot)[1]
+        orientation[2] = transformAngle(orientation[2])
+    
     return position[0], position[1], orientation[2]
+
+
+def transformAngle(angle):
+    if(angle > np.deg2rad(0) and angle < np.deg2rad(180)):
+        angle = np.deg2rad(180) - angle
+    elif(angle < np.deg2rad(0) and angle > np.deg2rad(-180)):
+        angle = -(np.deg2rad(180) + angle)
+    return angle
+
 
 def setRobotMotion(clientID, motors, velocity):
     sim.simxSetJointTargetVelocity(clientID, motors[0], velocity[0], sim.simx_opmode_oneshot)
@@ -54,15 +69,16 @@ def inverseKinematics(local_speed):
                   [local_speed[1]],
                   [local_speed[2]]])
 
-    A = np.array([[-np.sin(alpha_1), np.cos(alpha_1), L],
-                  [-np.sin(alpha_2), np.cos(alpha_2), L],
-                  [-np.sin(alpha_3), np.cos(alpha_3), L],
-                  [-np.sin(alpha_4), np.cos(alpha_4), L]])
+    A = np.array([[-np.sin(alpha_1), np.cos(alpha_1), -L],
+                  [-np.sin(alpha_2), np.cos(alpha_2), -L],
+                  [-np.sin(alpha_3), np.cos(alpha_3), -L],
+                  [-np.sin(alpha_4), np.cos(alpha_4), -L]])
 
     Phi = np.matmul(A, V)
 
-    print("Phi0 = {} Phi1 = {} Phi2 = {} Phi3 = {}".format(Phi[0], Phi[1], Phi[2], Phi[3]))    
+    # print("Phi0 = {} Phi1 = {} Phi2 = {} Phi3 = {}".format(Phi[0], Phi[1], Phi[2], Phi[3]))    
     return float(Phi[0]), float(Phi[1]), float(Phi[2]), float(Phi[3])
+
 
 def keyboardRoutine():
 
@@ -70,7 +86,7 @@ def keyboardRoutine():
     # Horizontal and Vertical
     if keyboard.is_pressed('w'):
         localSpeed = [0, 4, 0]
-    elif keyboard.is_pressed('s'):
+    elif keyboard.is_pressed('x'):
         localSpeed = [0, -4, 0]
     elif keyboard.is_pressed('a'):
         localSpeed = [-4, 0, 0]
@@ -89,11 +105,51 @@ def keyboardRoutine():
 
     # Rotation
     elif keyboard.is_pressed('r'):
-        localSpeed = [0, 0, -4]
-    elif keyboard.is_pressed('t'):
         localSpeed = [0, 0, 4]
+    elif keyboard.is_pressed('t'):
+        localSpeed = [0, 0, -4]
 
     return localSpeed
+
+
+def moveToPoint(waypoint, robotPose):
+
+    globalSpeed = [0, 0, 0]
+
+    proportional = [0, 0, 0]
+    error = [0, 0, 0]
+    kp = [5, 5, 3]
+    ki = [0, 0, 0]
+    kd = [0, 0, 0]
+
+    # print("target[2] = {:.2f} | pose[2] = {:.2f}".format(waypoint[2]*180/np.pi, robotPose[2]*180/np.pi))
+    # P controller # todo pid controller
+    for i in range(3):
+        error[i] = waypoint[i] - robotPose[i]
+
+        # Nearest Angle
+        if(i == 2 and abs(error[2]) >= np.pi):
+            if(error[2] > 0):
+                error[2] = error[2] - 2*np.pi
+            else:
+                error[2] = error[2] + 2*np.pi
+
+        proportional[i] = kp[i] * error[i]
+
+        globalSpeed[i] = proportional[i]
+
+    return globalSpeed
+
+
+def globalToLocal(globalSpeed, heading):
+    localSpeed = [0, 0, 0]
+
+    localSpeed[0] = globalSpeed[0]*np.cos(heading) + globalSpeed[1]*np.sin(heading)
+    localSpeed[1] = -globalSpeed[0]*np.sin(heading) + globalSpeed[1]*np.cos(heading)
+    localSpeed[2] = globalSpeed[2]
+
+    return localSpeed
+
 
 # === Main Program ===
 # --------------------
@@ -103,16 +159,19 @@ client_id = connectSimulator()
  
 # --- Get Object Handler ---
 robotHandler = setObjectHandler(client_id, "/OmniPlatform")
+robotOrientationHandler = setObjectHandler(client_id, "/OmniPlatform/link[0]")
 wheelHandler = [None]*4
 for i in range(4):
     wheelHandler[i] = setObjectHandler(client_id, "/OmniPlatform/link[" + str(i) + "]/regularRotation")
 
-waypoint = [None]*2
+waypointHandler = [None]*2
 for i in range(2):
-    waypoint[i] = setObjectHandler(client_id, "/Cylinder[" + str(i+1) + "]")
+    waypointHandler[i] = setObjectHandler(client_id, "/Cylinder[" + str(i) + "]")
 
 # --- Get initial Pose ---
-robotPose = getObjectPose(client_id, robotHandler, block=True)
+robotPose = getObjectPose(client_id, robotHandler, block=True, robot=True)
+waypointPose = [None]*10
+waypointPose[0] = getObjectPose(client_id, waypointHandler[0], block=True)
 
 # --- Initial Param ---
 samp_time = 0.1
@@ -121,19 +180,28 @@ time_start = time.time()
 
 wheelsPhi = [0, 0, 0, 0]
 localSpeed = [0, 0, 0]
-mode = 1
+globalSpeed = [0, 0, 0]
+mode = 2
 
 while True:
     t_now = time.time() - time_start
     if t_now >= samp_time*n:
-        # update time
+        # Update time
         n += 1
 
-        robotPose = getObjectPose(client_id, robotHandler)
+        # Update poses
+        robotPose = getObjectPose(client_id, robotHandler, robot=True)
+        waypointPose[0] = getObjectPose(client_id, waypointHandler[0])
 
-        if(mode ==1):
+        if(mode == 1): # Keyboard control
             localSpeed = keyboardRoutine()
             wheelsPhi = inverseKinematics(localSpeed)
+        
+        elif(mode == 2): # Move to point
+            globalSpeed = moveToPoint(waypointPose[0], robotPose)
+            localSpeed = globalToLocal(globalSpeed, robotPose[2])
+            wheelsPhi = inverseKinematics(localSpeed)
+
 
         setRobotMotion(client_id, wheelHandler, wheelsPhi)
         
