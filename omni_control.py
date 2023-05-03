@@ -6,6 +6,8 @@ import numpy as np
 import sys
 import sim
 
+from waypoint import *
+
 # === Function Definition ===
 # ---------------------------
 def connectSimulator():
@@ -80,45 +82,48 @@ def inverseKinematics(local_speed):
     return float(Phi[0]), float(Phi[1]), float(Phi[2]), float(Phi[3])
 
 
-def keyboardRoutine():
+def keyboardRoutine(speed):
 
     localSpeed = [0, 0, 0]
     # Horizontal and Vertical
     if keyboard.is_pressed('w'):
-        localSpeed = [0, 4, 0]
-    elif keyboard.is_pressed('x'):
-        localSpeed = [0, -4, 0]
-    elif keyboard.is_pressed('a'):
-        localSpeed = [-4, 0, 0]
-    elif keyboard.is_pressed('d'):
-        localSpeed = [4, 0, 0]
+        localSpeed += np.array([0, 1, 0])
+    if keyboard.is_pressed('x'):
+        localSpeed += np.array([0, -1, 0])
+    if keyboard.is_pressed('a'):
+        localSpeed += np.array([-1, 0, 0])
+    if keyboard.is_pressed('d'):
+        localSpeed += np.array([1, 0, 0])
 
     # Diagonal
-    elif keyboard.is_pressed('q'):
-        localSpeed = [-4, 4, 0]
-    elif keyboard.is_pressed('e'):
-        localSpeed = [4, 4, 0]
-    elif keyboard.is_pressed('z'):
-        localSpeed = [-4, -4, 0]
-    elif keyboard.is_pressed('c'):
-        localSpeed = [4, -4, 0]
+    if keyboard.is_pressed('q'):
+        localSpeed += np.array([-1, 1, 0])
+    if keyboard.is_pressed('e'):
+        localSpeed += np.array([1, 1, 0])
+    if keyboard.is_pressed('z'):
+        localSpeed += np.array([-1, -1, 0])
+    if keyboard.is_pressed('c'):
+        localSpeed += np.array([1, -1, 0])
 
     # Rotation
-    elif keyboard.is_pressed('r'):
-        localSpeed = [0, 0, 4]
-    elif keyboard.is_pressed('t'):
-        localSpeed = [0, 0, -4]
+    if keyboard.is_pressed('r'):
+        localSpeed += np.array([0, 0, 1])
+    if keyboard.is_pressed('t'):
+        localSpeed += np.array([0, 0, -1])
+
+    localSpeed = speed*np.array(localSpeed)
+    print(localSpeed)
 
     return localSpeed
 
 
-def moveToPoint(waypoint, robotPose):
+def moveToPoint(robotPose, waypoint):
 
     globalSpeed = [0, 0, 0]
 
     proportional = [0, 0, 0]
     error = [0, 0, 0]
-    kp = [5, 5, 3]
+    kp = [20, 20, 5] # 5 5 3
     ki = [0, 0, 0]
     kd = [0, 0, 0]
 
@@ -138,7 +143,47 @@ def moveToPoint(waypoint, robotPose):
 
         globalSpeed[i] = proportional[i]
 
+        # Limiting Speed
+        if(globalSpeed[i] >= 10):
+            globalSpeed[i] = 10
+        elif(globalSpeed[i] <= -10):
+            globalSpeed[i] = -10
+
     return globalSpeed
+
+
+def purePursuit(robotPose, waypoints, offset):
+
+    target = robotPose
+    epsilon = 0.1
+
+    # pure pursuit
+    if(purePursuit.wp < len(waypoints)-1):
+        target = waypoints[purePursuit.wp]
+        while(np.linalg.norm(np.array(target[0:2]) - np.array(robotPose[0:2])) < offset and purePursuit.wp < len(waypoints)-1):
+            target = waypoints[purePursuit.wp]
+            purePursuit.wp += 1
+
+
+    elif(purePursuit.wp == len(waypoints)-1):
+        target = waypoints[purePursuit.wp]
+        if((np.linalg.norm(np.array(target[0:3]) - np.array(robotPose[0:3])) < epsilon)):
+            purePursuit.count += 1
+        else:
+            purePursuit.count = 0
+        if(purePursuit.count == 25):
+            purePursuit.wp += 1
+            purePursuit.count = 0
+
+    else:
+        pass
+    
+    print("wp = ", purePursuit.wp, "/", len(waypoints), "target = ", np.round(target,2), "count = ", purePursuit.count)
+
+
+    return list(target)
+purePursuit.wp = 0
+purePursuit.count = 0
 
 
 def globalToLocal(globalSpeed, heading):
@@ -181,7 +226,9 @@ time_start = time.time()
 wheelsPhi = [0, 0, 0, 0]
 localSpeed = [0, 0, 0]
 globalSpeed = [0, 0, 0]
-mode = 2
+target = [0, 0, 0]
+
+mode = 3
 
 while True:
     t_now = time.time() - time_start
@@ -189,25 +236,30 @@ while True:
         # Update time
         n += 1
 
+        if(mode == 1): # Keyboard control
+            localSpeed = keyboardRoutine(speed=8)
+        
+        elif(mode == 2): # Move to point PID
+            globalSpeed = moveToPoint(robotPose, waypointPose[0])
+            localSpeed = globalToLocal(globalSpeed, robotPose[2])
+
+        elif(mode == 3): # Pure Pursuit PID
+            target = purePursuit(robotPose, waypointPose3, 0.5)
+            globalSpeed = moveToPoint(robotPose, target)
+            localSpeed = globalToLocal(globalSpeed, robotPose[2])
+
+        wheelsPhi = inverseKinematics(localSpeed)
+        setRobotMotion(client_id, wheelHandler, wheelsPhi)
+
         # Update poses
         robotPose = getObjectPose(client_id, robotHandler, robot=True)
         waypointPose[0] = getObjectPose(client_id, waypointHandler[0])
-
-        if(mode == 1): # Keyboard control
-            localSpeed = keyboardRoutine()
-            wheelsPhi = inverseKinematics(localSpeed)
         
-        elif(mode == 2): # Move to point
-            globalSpeed = moveToPoint(waypointPose[0], robotPose)
-            localSpeed = globalToLocal(globalSpeed, robotPose[2])
-            wheelsPhi = inverseKinematics(localSpeed)
-
-
-        setRobotMotion(client_id, wheelHandler, wheelsPhi)
-        
-        print("Wheels Phi: {:.2f}, {:.2f}, {:.2f}, {:.2f}".format(wheelsPhi[0], wheelsPhi[1], wheelsPhi[2], wheelsPhi[3]))
+        print("Global Speed: {:.2f}, {:.2f}, {:.2f} | Wheels Phi: {:.2f}, {:.2f}, {:.2f}, {:.2f}".format(globalSpeed[0], globalSpeed[1], globalSpeed[2], wheelsPhi[0], wheelsPhi[1], wheelsPhi[2], wheelsPhi[3]))
         print("Time = {} Robot Pose: {:.2f}, {:.2f}, {:.2f}\n".format(round(t_now,2), robotPose[0], robotPose[1], robotPose[2]*(180/np.pi)))
         # print("ya")
+
+
     
 # --- End of Simulation ---
 sim.simxFinish(client_id)
