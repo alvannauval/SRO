@@ -6,7 +6,12 @@ import numpy as np
 import sys
 import sim
 
+import numpy as np
+from scipy import linalg as la
+
 from waypoint import *
+
+print("Done.")
 
 # === Function Definition ===
 # ---------------------------
@@ -78,6 +83,14 @@ def inverseKinematics(local_speed):
 
     Phi = np.matmul(A, V)
 
+    # Limiting Speed
+    for i in range(4):
+
+        if(Phi[i] >= 15):
+            Phi[i] = 15
+        elif(Phi[i] <= -15):
+            Phi[i] = -15
+
     # print("Phi0 = {} Phi1 = {} Phi2 = {} Phi3 = {}".format(Phi[0], Phi[1], Phi[2], Phi[3]))    
     return float(Phi[0]), float(Phi[1]), float(Phi[2]), float(Phi[3])
 
@@ -117,7 +130,16 @@ def keyboardRoutine(speed):
     return localSpeed
 
 
-def moveToPoint(robotPose, waypoint):
+def globalToLocal(globalSpeed, heading):
+    localSpeed = [0, 0, 0]
+
+    localSpeed[0] = globalSpeed[0]*np.cos(heading) + globalSpeed[1]*np.sin(heading)
+    localSpeed[1] = -globalSpeed[0]*np.sin(heading) + globalSpeed[1]*np.cos(heading)
+    localSpeed[2] = globalSpeed[2]
+
+    return localSpeed
+
+def movePID(robotPose, waypoint):
 
     globalSpeed = [0, 0, 0]
 
@@ -143,13 +165,60 @@ def moveToPoint(robotPose, waypoint):
 
         globalSpeed[i] = proportional[i]
 
-        # Limiting Speed
-        if(globalSpeed[i] >= 10):
-            globalSpeed[i] = 10
-        elif(globalSpeed[i] <= -10):
-            globalSpeed[i] = -10
-
     return globalSpeed
+
+def moveLQR(robotPose, waypoint, dt):
+
+    localSpeed = [0, 0, 0]
+
+    error_x     = waypoint[0] - robotPose[0]
+    error_y     = waypoint[1] - robotPose[1]
+    error_theta = waypoint[2] - robotPose[2]
+
+    # nearest angle
+    if(abs(error_theta) >= np.pi):
+        if(error_theta > 0):
+            error_theta = error_theta - 2*np.pi
+        else:
+            error_theta = error_theta + 2*np.pi
+
+    # print("x = {:.4f} x_target = {:.4f} error_x = {:.4f}".format(robotPose[0], waypoint[0], error_x))
+    # print("y = {:.4f} y_target = {:.4f} error_y = {:.4f}".format(robotPose[1], waypoint[1], error_y))
+    # print("theta = {:.4f} theta_target = {:.4f} error_theta = {:.4f}".format(robotPose[2], waypoint[2], error_theta))
+ 
+    A = np.array([[1, 0, 0],
+                  [0, 1, 0],
+                  [0, 0, 1]]) # State Variable Matrix (Identity)
+    B = np.array([[-np.cos(robotPose[2])*dt,  np.sin(robotPose[2])*dt,    0],
+                  [-np.sin(robotPose[2])*dt, -np.cos(robotPose[2])*dt,    0],
+                  [                       0,                        0, 1*dt]]) # Input Control Matrix
+    Q = np.array([[50, 0, 0], # move 50 50 35 | track multiply by 5
+                  [0, 50, 0],
+                  [0, 0, 25]]) # State Variable Cost Matrix
+    Q = Q * 1
+    R = np.array([[1, 0, 0],
+                  [0, 1, 0],
+                  [0, 0, 1]]) # Input Control Cost Matrix
+
+    E = np.array([[error_x],
+                  [error_y],
+                  [error_theta]]) # Error Matrix
+
+    P = la.solve_discrete_are(A, B, Q, R) # Solve Ricatti Equation
+    K = la.inv(R) @ B.T @ P # Solve LQR Gain
+    u = -K @ E # Solve Input Control
+
+    print(u)
+
+    u = list(u.flatten())
+    u[2] *= -1
+    localSpeed = u
+
+    # print(P)
+    # print(K)
+    print(u)
+
+    return localSpeed
 
 
 def purePursuit(robotPose, waypoints, offset):
@@ -163,7 +232,6 @@ def purePursuit(robotPose, waypoints, offset):
         while(np.linalg.norm(np.array(target[0:2]) - np.array(robotPose[0:2])) < offset and purePursuit.wp < len(waypoints)-1):
             target = waypoints[purePursuit.wp]
             purePursuit.wp += 1
-
 
     elif(purePursuit.wp == len(waypoints)-1):
         target = waypoints[purePursuit.wp]
@@ -180,20 +248,9 @@ def purePursuit(robotPose, waypoints, offset):
     
     print("wp = ", purePursuit.wp, "/", len(waypoints), "target = ", np.round(target,2), "count = ", purePursuit.count)
 
-
     return list(target)
 purePursuit.wp = 0
 purePursuit.count = 0
-
-
-def globalToLocal(globalSpeed, heading):
-    localSpeed = [0, 0, 0]
-
-    localSpeed[0] = globalSpeed[0]*np.cos(heading) + globalSpeed[1]*np.sin(heading)
-    localSpeed[1] = -globalSpeed[0]*np.sin(heading) + globalSpeed[1]*np.cos(heading)
-    localSpeed[2] = globalSpeed[2]
-
-    return localSpeed
 
 
 # === Main Program ===
@@ -228,25 +285,37 @@ localSpeed = [0, 0, 0]
 globalSpeed = [0, 0, 0]
 target = [0, 0, 0]
 
-mode = 3
+mode = 4
+
+time_a = time.time()
+time_b = time.time()
 
 while True:
     t_now = time.time() - time_start
     if t_now >= samp_time*n:
         # Update time
         n += 1
+        dt = time_b - time_a
+        time_a = time.time()
 
         if(mode == 1): # Keyboard control
             localSpeed = keyboardRoutine(speed=8)
         
         elif(mode == 2): # Move to point PID
-            globalSpeed = moveToPoint(robotPose, waypointPose[0])
+            globalSpeed = movePID(robotPose, waypointPose[0])
             localSpeed = globalToLocal(globalSpeed, robotPose[2])
 
         elif(mode == 3): # Pure Pursuit PID
-            target = purePursuit(robotPose, waypointPose3, 0.5)
-            globalSpeed = moveToPoint(robotPose, target)
+            target = purePursuit(robotPose, waypointPose3, 1)
+            globalSpeed = movePID(robotPose, target)
             localSpeed = globalToLocal(globalSpeed, robotPose[2])
+
+        elif(mode == 4): # move to point LQR
+            localSpeed = moveLQR(robotPose, waypointPose[0], dt)
+
+        elif(mode == 5): # Pure Pursuit LQR
+            target = purePursuit(robotPose, waypointPose3, 1)
+            localSpeed = moveLQR(robotPose, target, dt)
 
         wheelsPhi = inverseKinematics(localSpeed)
         setRobotMotion(client_id, wheelHandler, wheelsPhi)
@@ -254,11 +323,10 @@ while True:
         # Update poses
         robotPose = getObjectPose(client_id, robotHandler, robot=True)
         waypointPose[0] = getObjectPose(client_id, waypointHandler[0])
-        
-        print("Global Speed: {:.2f}, {:.2f}, {:.2f} | Wheels Phi: {:.2f}, {:.2f}, {:.2f}, {:.2f}".format(globalSpeed[0], globalSpeed[1], globalSpeed[2], wheelsPhi[0], wheelsPhi[1], wheelsPhi[2], wheelsPhi[3]))
-        print("Time = {} Robot Pose: {:.2f}, {:.2f}, {:.2f}\n".format(round(t_now,2), robotPose[0], robotPose[1], robotPose[2]*(180/np.pi)))
-        # print("ya")
+        time_b = time.time()
 
+        print("Global Speed: {:.2f}, {:.2f}, {:.2f} | Wheels Phi: {:.2f}, {:.2f}, {:.2f}, {:.2f}".format(globalSpeed[0], globalSpeed[1], globalSpeed[2], wheelsPhi[0], wheelsPhi[1], wheelsPhi[2], wheelsPhi[3]))
+        print("Time = {} dt = {:.2e} | Robot Pose: {:.2f}, {:.2f}, {:.2f}\n".format(round(t_now,2), dt, robotPose[0], robotPose[1], robotPose[2]*(180/np.pi)))
 
     
 # --- End of Simulation ---
